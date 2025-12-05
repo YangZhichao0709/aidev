@@ -1,9 +1,8 @@
 runpod
-torch
-diffusers
-transformers
-accelerate
+torch==2.0.1
+diffusers==0.25.0
+transformers==4.36.2
+accelerate==0.25.0
 scipy
 safetensors
 pillow
-numpy

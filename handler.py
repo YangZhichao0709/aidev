@@ -1,37 +1,63 @@
 import runpod
-import torch
-import base64
-import io
-from diffusers import StableDiffusionInpaintPipeline
-from PIL import Image
+import sys
 
 # ---------------------------------------------------------
-# 1. モデルの設定とロード (Cold Start時に1回だけ実行)
+# 起動直後のログ（これが表示されればPython自体は動いている）
+# ---------------------------------------------------------
+print("--- WORKER STARTED ---")
+
+# ---------------------------------------------------------
+# 1. 厳重なインポートチェック
+# ---------------------------------------------------------
+try:
+    print("Loading standard libraries...")
+    import base64
+    import io
+    import time
+    
+    print("Loading Torch...")
+    import torch
+    
+    print("Loading Diffusers...")
+    from diffusers import StableDiffusionInpaintPipeline
+    
+    print("Loading PIL...")
+    from PIL import Image
+    
+    print("All imports successful!")
+
+except ImportError as e:
+    # ここで何が足りないかを表示して終了する
+    print(f"!!! CRITICAL IMPORT ERROR !!!: {e}")
+    sys.exit(1)
+except Exception as e:
+    print(f"!!! UNEXPECTED ERROR !!!: {e}")
+    sys.exit(1)
+
+# ---------------------------------------------------------
+# 2. モデルのロード
 # ---------------------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_id = "runwayml/stable-diffusion-inpainting"
+pipe = None
 
-print(f"モデルをロード中... ({device})")
+print(f"Model Loading on {device}...")
 
 try:
     pipe = StableDiffusionInpaintPipeline.from_pretrained(
         model_id,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        # 安全性チェックを無効化する場合（真っ黒な画像が出るのを防ぐため）
         safety_checker=None 
     ).to(device)
-    
-    # 高速化のための設定
+    # 高速化
     if device == "cuda":
         pipe.enable_xformers_memory_efficient_attention()
-        
-    print("モデルロード完了！")
+    print("Model Loaded Successfully!")
 except Exception as e:
-    print(f"モデルロードエラー: {e}")
-    pipe = None
+    print(f"Model Load Failed: {e}")
 
 # ---------------------------------------------------------
-# 2. ヘルパー関数
+# 3. ヘルパー関数
 # ---------------------------------------------------------
 def decode_base64(string):
     return Image.open(io.BytesIO(base64.b64decode(string)))
@@ -42,48 +68,37 @@ def encode_base64(image):
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 # ---------------------------------------------------------
-# 3. ハンドラ関数 (リクエストのたびに実行)
+# 4. ハンドラ
 # ---------------------------------------------------------
 def handler(job):
+    print(f"Received job: {job['id']}") # ログ用
     job_input = job["input"]
     
-    # パラメータ取得
     image_str = job_input.get("image")
     mask_str = job_input.get("mask")
-    prompt = job_input.get("prompt", "a cat sitting on a bench")
-    negative_prompt = job_input.get("negative_prompt", "low quality, bad anatomy")
-    steps = job_input.get("num_inference_steps", 25)
-    guidance_scale = job_input.get("guidance_scale", 7.5)
+    prompt = job_input.get("prompt", "a cat")
 
     if not image_str or not mask_str:
-        return {"error": "画像とマスクが必要です"}
-
+        return {"error": "No image provided"}
+    
     if pipe is None:
-        return {"error": "モデルのロードに失敗しています"}
+        return {"error": "Model not loaded"}
 
     try:
-        # 画像変換
         init_image = decode_base64(image_str).convert("RGB").resize((512, 512))
         mask_image = decode_base64(mask_str).convert("RGB").resize((512, 512))
 
-        # 推論実行
-        # generator=torch.Generator(device).manual_seed(42) # 固定シードにしたい場合
         output = pipe(
             prompt=prompt,
             image=init_image,
             mask_image=mask_image,
-            negative_prompt=negative_prompt,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale
+            num_inference_steps=20
         ).images[0]
 
-        # 結果返却
         return {"image": encode_base64(output)}
 
     except Exception as e:
+        print(f"Generation Error: {e}")
         return {"error": str(e)}
 
-# ---------------------------------------------------------
-# 4. サーバーレス起動
-# ---------------------------------------------------------
 runpod.serverless.start({"handler": handler})

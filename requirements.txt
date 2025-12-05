@@ -3,5 +3,7 @@ torch
 diffusers
 transformers
 accelerate
-pillow
 scipy
+safetensors
+pillow
+numpy
